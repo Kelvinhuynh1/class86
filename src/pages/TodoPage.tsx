@@ -1,126 +1,109 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Task } from "@/types";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
 import {
-  Plus,
+  Send,
+  Calendar,
+  CheckCircle2,
+  Circle,
+  CalendarIcon,
+  Clock,
   Edit,
   Trash2,
-  Calendar,
-  CheckCircle,
-  MessageSquare,
-  Send,
 } from "lucide-react";
-import { format, isToday, isPast, isFuture } from "date-fns";
+import {
+  format,
+  isToday,
+  isPast,
+  addDays,
+  isSameDay,
+  isWithinInterval,
+} from "date-fns";
 
-interface Comment {
+interface TodoTask {
   id: string;
-  taskId: string;
-  content: string;
-  createdBy: string;
-  createdAt: string;
+  title: string;
+  description: string | null;
+  due_date: string;
+  completed: boolean;
+  created_by: string;
+  assigned_to: string | null;
+  subject: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+interface UserCompletedTask {
+  id: string;
+  user_id: string;
+  task_id: string;
+  completed_at: string;
 }
 
 export default function TodoPage() {
   const { user, hasPermission } = useAuth();
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [comments, setComments] = useState<Record<string, Comment[]>>({});
+  const [tasks, setTasks] = useState<TodoTask[]>([]);
+  const [userCompletedTasks, setUserCompletedTasks] = useState<
+    Record<string, UserCompletedTask[]>
+  >({});
   const [loading, setLoading] = useState(true);
-  const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
-  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCommentsOpen, setIsCommentsOpen] = useState<Record<string, boolean>>(
-    {},
+  const [newTaskText, setNewTaskText] = useState("");
+  const [newTaskDueDate, setNewTaskDueDate] = useState<string>(
+    new Date().toISOString().split("T")[0],
   );
-  const [newComment, setNewComment] = useState<Record<string, string>>({});
-  const [newTask, setNewTask] = useState<Partial<Task>>({
-    title: "",
-    description: "",
-    dueDate: new Date().toISOString().split("T")[0],
-    completed: false,
-  });
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  const [filter, setFilter] = useState<
-    "all" | "today" | "upcoming" | "completed"
-  >("all");
-  const canEditTasks = hasPermission(["Leader", "Co-Leader"]);
-  const commentInputRefs = useRef<Record<string, HTMLInputElement>>({});
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [editingTask, setEditingTask] = useState<TodoTask | null>(null);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+
+  const canEditTasks = hasPermission(["Leader", "Co-Leader", "Admin"]);
 
   useEffect(() => {
     fetchTasks();
-    setupRealtimeSubscription();
+    fetchUserCompletedTasks();
 
-    return () => {
-      supabase.removeChannel(supabase.channel("todo_tasks_changes"));
-      supabase.removeChannel(supabase.channel("task_comments_changes"));
-    };
-  }, []);
-
-  const setupRealtimeSubscription = () => {
-    // Subscribe to task changes
-    supabase
+    // Set up realtime subscriptions
+    const tasksSubscription = supabase
       .channel("todo_tasks_changes")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "todo_tasks" },
-        (payload) => {
-          fetchTasks();
-        },
+        () => fetchTasks(),
       )
       .subscribe();
 
-    // Subscribe to comment changes
-    supabase
-      .channel("task_comments_changes")
+    const completedTasksSubscription = supabase
+      .channel("user_completed_tasks_changes")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "task_comments" },
-        (payload) => {
-          if (payload.new && (payload.new as any).task_id) {
-            fetchComments((payload.new as any).task_id);
-          }
-        },
+        { event: "*", schema: "public", table: "user_completed_tasks" },
+        () => fetchUserCompletedTasks(),
       )
       .subscribe();
-  };
+
+    return () => {
+      supabase.removeChannel(tasksSubscription);
+      supabase.removeChannel(completedTasksSubscription);
+    };
+  }, []);
 
   const fetchTasks = async () => {
     setLoading(true);
     try {
-      // Check if todo_tasks table exists
-      const { error: checkError } = await supabase
-        .from("todo_tasks")
-        .select("id")
-        .limit(1);
-
-      if (checkError && checkError.code === "42P01") {
-        // Create table if it doesn't exist
-        await createTodoTasksTable();
-      }
-
-      // Fetch tasks from Supabase
       const { data, error } = await supabase
         .from("todo_tasks")
         .select("*")
@@ -129,199 +112,95 @@ export default function TodoPage() {
       if (error) throw error;
 
       if (data) {
-        // Transform to our Task type
-        const transformedTasks: Task[] = data.map((task) => ({
-          id: task.id,
-          title: task.title,
-          description: task.description,
-          dueDate: task.due_date,
-          subject: task.subject,
-          assignedTo: task.assigned_to ? [task.assigned_to] : [],
-          completed: task.completed,
-          createdBy: task.created_by,
-          createdAt: task.created_at,
-        }));
-
-        setTasks(transformedTasks);
-
-        // Fetch comments for each task
-        transformedTasks.forEach((task) => {
-          fetchComments(task.id);
-        });
-      } else {
-        setTasks([]);
+        setTasks(data);
       }
     } catch (err) {
       console.error("Error fetching tasks:", err);
-      setTasks([]);
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchComments = async (taskId: string) => {
+  const fetchUserCompletedTasks = async () => {
     try {
-      // Check if task_comments table exists
-      const { error: checkError } = await supabase
-        .from("task_comments")
-        .select("id")
-        .limit(1);
-
-      if (checkError && checkError.code === "42P01") {
-        // Create table if it doesn't exist
-        await createTaskCommentsTable();
-      }
-
       const { data, error } = await supabase
-        .from("task_comments")
-        .select("*")
-        .eq("task_id", taskId)
-        .order("created_at", { ascending: true });
+        .from("user_completed_tasks")
+        .select("*");
 
       if (error) throw error;
 
       if (data) {
-        const transformedComments: Comment[] = data.map((comment) => ({
-          id: comment.id,
-          taskId: comment.task_id,
-          content: comment.content,
-          createdBy: comment.created_by,
-          createdAt: comment.created_at,
-        }));
-
-        setComments((prev) => ({
-          ...prev,
-          [taskId]: transformedComments,
-        }));
+        // Group by task_id
+        const grouped: Record<string, UserCompletedTask[]> = {};
+        data.forEach((task) => {
+          if (!grouped[task.task_id]) {
+            grouped[task.task_id] = [];
+          }
+          grouped[task.task_id].push(task);
+        });
+        setUserCompletedTasks(grouped);
       }
     } catch (err) {
-      console.error("Error fetching comments:", err);
+      console.error("Error fetching user completed tasks:", err);
     }
-  };
-
-  const createTodoTasksTable = async () => {
-    try {
-      // Create the todo_tasks table
-      const { error } = await supabase.rpc("create_todo_tasks_table");
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error creating todo_tasks table:", err);
-    }
-  };
-
-  const createTaskCommentsTable = async () => {
-    try {
-      // Create SQL for task_comments table
-      const { error } = await supabase.rpc("create_task_comments_table");
-      if (error) throw error;
-    } catch (err) {
-      console.error("Error creating task_comments table:", err);
-    }
-  };
-
-  const addComment = async (taskId: string) => {
-    if (!user || !newComment[taskId]?.trim()) return;
-
-    try {
-      const comment = {
-        task_id: taskId,
-        content: newComment[taskId],
-        created_by: user.displayName,
-        created_at: new Date().toISOString(),
-      };
-
-      const { error } = await supabase.from("task_comments").insert([comment]);
-
-      if (error) throw error;
-
-      // Clear input field
-      setNewComment((prev) => ({
-        ...prev,
-        [taskId]: "",
-      }));
-
-      // Focus back on input
-      if (commentInputRefs.current[taskId]) {
-        commentInputRefs.current[taskId].focus();
-      }
-    } catch (err) {
-      console.error("Error adding comment:", err);
-    }
-  };
-
-  const toggleComments = (taskId: string) => {
-    setIsCommentsOpen((prev) => ({
-      ...prev,
-      [taskId]: !prev[taskId],
-    }));
   };
 
   const handleAddTask = async () => {
-    if (!newTask.title || !user || !canEditTasks) return;
+    if (!newTaskText.trim() || !user || !canEditTasks) return;
 
     try {
-      const task = {
-        title: newTask.title,
-        description: newTask.description || "",
-        due_date: newTask.dueDate,
-        subject: newTask.subject,
-        assigned_to: user.id,
-        completed: false,
-        created_by: user.displayName,
-        created_at: new Date().toISOString(),
-      };
-
-      // Add task to Supabase
       const { data, error } = await supabase
         .from("todo_tasks")
-        .insert([task])
+        .insert([
+          {
+            title: newTaskText,
+            description: null,
+            due_date: newTaskDueDate,
+            completed: false,
+            created_by: user.displayName,
+            assigned_to: null,
+            subject: null,
+          },
+        ])
         .select();
 
       if (error) throw error;
 
-      if (data && data[0]) {
-        // Add to local state
-        const newTaskWithId: Task = {
-          id: data[0].id,
-          title: data[0].title,
-          description: data[0].description,
-          dueDate: data[0].due_date,
-          subject: data[0].subject,
-          assignedTo: data[0].assigned_to ? [data[0].assigned_to] : [],
-          completed: data[0].completed,
-          createdBy: data[0].created_by,
-          createdAt: data[0].created_at,
-        };
-
-        setTasks([...tasks, newTaskWithId]);
-      }
-
       // Reset form
-      setNewTask({
-        title: "",
-        description: "",
-        dueDate: new Date().toISOString().split("T")[0],
-        completed: false,
-      });
-      setIsAddDialogOpen(false);
+      setNewTaskText("");
+      setNewTaskDueDate(new Date().toISOString().split("T")[0]);
+      setShowDatePicker(false);
     } catch (err) {
       console.error("Error adding task:", err);
     }
   };
 
+  const deleteTask = async (taskId: string) => {
+    try {
+      const { error } = await supabase
+        .from("todo_tasks")
+        .delete()
+        .eq("id", taskId);
+      if (error) throw error;
+
+      // Update local state
+      setTasks(tasks.filter((t) => t.id !== taskId));
+    } catch (err) {
+      console.error("Error deleting task:", err);
+    }
+  };
+
   const handleEditTask = async () => {
-    if (!editingTask) return;
+    if (!editingTask || !user || !canEditTasks) return;
 
     try {
-      // Update task in Supabase
       const { error } = await supabase
         .from("todo_tasks")
         .update({
           title: editingTask.title,
           description: editingTask.description,
-          due_date: editingTask.dueDate,
-          subject: editingTask.subject,
-          completed: editingTask.completed,
+          due_date: editingTask.due_date,
+          updated_at: new Date().toISOString(),
         })
         .eq("id", editingTask.id);
 
@@ -331,6 +210,7 @@ export default function TodoPage() {
       setTasks(
         tasks.map((task) => (task.id === editingTask.id ? editingTask : task)),
       );
+
       setEditingTask(null);
       setIsEditDialogOpen(false);
     } catch (err) {
@@ -338,66 +218,136 @@ export default function TodoPage() {
     }
   };
 
-  const handleDeleteTask = async (id: string) => {
+  const handleToggleTaskCompletion = async (taskId: string) => {
+    if (!user) return;
+
     try {
-      // Delete task from Supabase
-      const { error } = await supabase.from("todo_tasks").delete().eq("id", id);
-
-      if (error) throw error;
-
-      // Update local state
-      setTasks(tasks.filter((task) => task.id !== id));
-    } catch (err) {
-      console.error("Error deleting task:", err);
-    }
-  };
-
-  const handleToggleComplete = async (id: string, completed: boolean) => {
-    try {
-      // Update task in Supabase
-      const { error } = await supabase
-        .from("todo_tasks")
-        .update({ completed: !completed })
-        .eq("id", id);
-
-      if (error) throw error;
-
-      // Update local state
-      setTasks(
-        tasks.map((task) =>
-          task.id === id ? { ...task, completed: !completed } : task,
-        ),
+      // Check if user has already completed this task
+      const userCompletedTask = userCompletedTasks[taskId]?.find(
+        (t) => t.user_id === user.id,
       );
+
+      if (userCompletedTask) {
+        // User has completed this task, so remove it
+        const { error } = await supabase
+          .from("user_completed_tasks")
+          .delete()
+          .eq("id", userCompletedTask.id);
+
+        if (error) throw error;
+
+        // Update local state
+        setUserCompletedTasks((prev) => ({
+          ...prev,
+          [taskId]: (prev[taskId] || []).filter(
+            (t) => t.id !== userCompletedTask.id,
+          ),
+        }));
+      } else {
+        // User has not completed this task, so add it
+        const { data, error } = await supabase
+          .from("user_completed_tasks")
+          .insert([
+            {
+              user_id: user.id,
+              task_id: taskId,
+              completed_at: new Date().toISOString(),
+            },
+          ])
+          .select();
+
+        if (error) throw error;
+
+        if (data) {
+          // Update local state
+          setUserCompletedTasks((prev) => ({
+            ...prev,
+            [taskId]: [...(prev[taskId] || []), data[0]],
+          }));
+        }
+      }
+
+      // Check if all users have completed the task
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) {
+        // For simplicity, we'll just mark the task as completed if the current user completes it
+        const completed = !userCompletedTask;
+
+        // Update the task's completed status if needed
+        if (completed !== task.completed) {
+          const { error } = await supabase
+            .from("todo_tasks")
+            .update({ completed })
+            .eq("id", taskId);
+
+          if (error) throw error;
+
+          // Update local state
+          setTasks(
+            tasks.map((t) => (t.id === taskId ? { ...t, completed } : t)),
+          );
+        }
+      }
     } catch (err) {
       console.error("Error toggling task completion:", err);
     }
   };
 
-  const startEditTask = (task: Task) => {
-    setEditingTask({ ...task });
-    setIsEditDialogOpen(true);
+  const isTaskCompletedByUser = (taskId: string, userId: string) => {
+    return (
+      userCompletedTasks[taskId]?.some((t) => t.user_id === userId) || false
+    );
   };
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return format(date, "MMM d, yyyy");
-  };
+  // Group tasks by their status and user completion status
+  const todayTasks = tasks.filter(
+    (task) => isToday(new Date(task.due_date)) && !isTaskCompletedByUser(task.id, user?.id || ""),
+  );
+  const upcomingTasks = tasks.filter((task) => {
+    const dueDate = new Date(task.due_date);
+    return !isToday(dueDate) && !isTaskCompletedByUser(task.id, user?.id || "") && !isPast(dueDate);
+  });
+  const pastDueTasks = tasks.filter((task) => {
+    const dueDate = new Date(task.due_date);
+    return isPast(dueDate) && !isToday(dueDate) && !isTaskCompletedByUser(task.id, user?.id || "");
+  });
+  const completedTasks = tasks.filter((task) => isTaskCompletedByUser(task.id, user?.id || ""));
 
-  const getFilteredTasks = () => {
-    return tasks.filter((task) => {
-      const taskDate = new Date(task.dueDate);
-      switch (filter) {
-        case "today":
-          return isToday(taskDate);
-        case "upcoming":
-          return isFuture(taskDate) && !isToday(taskDate);
-        case "completed":
-          return task.completed;
-        default:
-          return true;
+  // Group upcoming tasks by date range
+  const groupedUpcomingTasks: Record<string, TodoTask[]> = {};
+  upcomingTasks.forEach((task) => {
+    const dueDate = new Date(task.due_date);
+    const today = new Date();
+    const tomorrow = addDays(today, 1);
+
+    if (isSameDay(dueDate, tomorrow)) {
+      const key = "Tomorrow";
+      if (!groupedUpcomingTasks[key]) groupedUpcomingTasks[key] = [];
+      groupedUpcomingTasks[key].push(task);
+    } else {
+      // Group by week
+      const startOfWeek = addDays(today, 2); // Start from day after tomorrow
+      const endOfWeek = addDays(today, 7);
+      const nextWeekStart = addDays(today, 8);
+      const nextWeekEnd = addDays(today, 14);
+
+      if (isWithinInterval(dueDate, { start: startOfWeek, end: endOfWeek })) {
+        const key = `This Week (${format(startOfWeek, "EEE d")} - ${format(endOfWeek, "EEE d")})`;
+        if (!groupedUpcomingTasks[key]) groupedUpcomingTasks[key] = [];
+        groupedUpcomingTasks[key].push(task);
+      } else if (
+        isWithinInterval(dueDate, { start: nextWeekStart, end: nextWeekEnd })
+      ) {
+        const key = `Next Week (${format(nextWeekStart, "EEE d")} - ${format(nextWeekEnd, "EEE d")})`;
+        if (!groupedUpcomingTasks[key]) groupedUpcomingTasks[key] = [];
+        groupedUpcomingTasks[key].push(task);
+      } else {
+        const key = "Later";
+        if (!groupedUpcomingTasks[key]) groupedUpcomingTasks[key] = [];
+        groupedUpcomingTasks[key].push(task);
       }
-    });
-  };
+    }
+  });
 
   if (loading) {
     return (
@@ -412,403 +362,510 @@ export default function TodoPage() {
   return (
     <DashboardLayout activeTab="todo">
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">To-Do Tasks</h1>
-            <p className="text-muted-foreground">
-              {canEditTasks
-                ? "Manage class tasks and assignments"
-                : "View class tasks and assignments"}
-            </p>
-          </div>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">To-Do Tasks</h1>
+          <p className="text-muted-foreground">
+            Manage and track class tasks and assignments.
+          </p>
+        </div>
+
+        <Card className="flex flex-col h-[calc(100vh-16rem)]">
+          <CardHeader className="pb-2">
+            <CardTitle>Tasks ({tasks.length})</CardTitle>
+          </CardHeader>
+          <CardContent className="flex-1 overflow-hidden p-0">
+            <ScrollArea className="h-full p-4">
+              <div className="space-y-6">
+                {/* Today's tasks */}
+                {todayTasks.length > 0 && (
+                  <div>
+                    <div
+                      className="flex justify-between items-center mb-2 cursor-pointer"
+                      onClick={() =>
+                        document
+                          .getElementById("today-tasks")
+                          ?.classList.toggle("hidden")
+                      }
+                    >
+                      <h3 className="font-medium text-sm flex items-center">
+                        <Badge variant="outline" className="mr-2">
+                          Today ({todayTasks.length})
+                        </Badge>
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        Click to expand/collapse
+                      </span>
+                    </div>
+                    <div id="today-tasks">
+                      <div className="space-y-2">
+                        {todayTasks.map((task) => {
+                          const isCompleted = isTaskCompletedByUser(
+                            task.id,
+                            user?.id || "",
+                          );
+                          return (
+                            <div
+                              key={task.id}
+                              className="flex items-start gap-3 p-2 hover:bg-muted/50 rounded-md"
+                            >
+                              <div className="mt-1">
+                                <div
+                                  onClick={() => handleToggleTaskCompletion(task.id)}
+                                  className="h-5 w-5 rounded border flex items-center justify-center cursor-pointer"
+                                >
+                                  {isCompleted && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                                </div>
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex justify-between items-start">
+                                  <div
+                                    className={`font-medium ${isCompleted ? "line-through text-muted-foreground" : ""}`}
+                                  >
+                                    {task.title}
+                                  </div>
+                                  {canEditTasks && (
+                                    <div className="flex space-x-1">
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          // Show edit dialog
+                                          setEditingTask(task);
+                                          setIsEditDialogOpen(true);
+                                        }}
+                                      >
+                                        <Edit className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6 text-destructive"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const taskId = task.id;
+                                          deleteTask(taskId);
+                                        }}
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center text-xs text-muted-foreground mt-1">
+                                  <Clock className="h-3 w-3 mr-1" />
+                                  <span>Today</span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Past due tasks */}
+                {pastDueTasks.length > 0 && (
+                  <div>
+                    <div
+                      className="flex justify-between items-center mb-2 cursor-pointer"
+                      onClick={() =>
+                        document
+                          .getElementById("overdue-tasks")
+                          ?.classList.toggle("hidden")
+                      }
+                    >
+                      <h3 className="font-medium text-sm flex items-center">
+                        <Badge variant="destructive" className="mr-2">
+                          Overdue ({pastDueTasks.length})
+                        </Badge>
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        Click to expand/collapse
+                      </span>
+                    </div>
+                    <div id="overdue-tasks">
+                      <div className="space-y-2">
+                        {pastDueTasks.map((task) => {
+                          const isCompleted = isTaskCompletedByUser(
+                            task.id,
+                            user?.id || "",
+                          );
+                          return (
+                            <div
+                              key={task.id}
+                              className="flex items-start gap-3 p-2 hover:bg-muted/50 rounded-md"
+                            >
+                              <div className="mt-1">
+                                <div
+                                  onClick={() => handleToggleTaskCompletion(task.id)}
+                                  className="h-5 w-5 rounded border flex items-center justify-center cursor-pointer"
+                                >
+                                  {isCompleted && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                                </div>
+                              </div>
+                              <div className="flex-1">
+                                <div className="flex justify-between items-start">
+                                  <div
+                                    className={`font-medium ${isCompleted ? "line-through text-muted-foreground" : "text-red-500"}`}
+                                  >
+                                    {task.title}
+                                  </div>
+                                  {canEditTasks && (
+                                    <div className="flex space-x-1">
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          // Show edit dialog
+                                          setEditingTask(task);
+                                          setIsEditDialogOpen(true);
+                                        }}
+                                      >
+                                        <Edit className="h-3 w-3" />
+                                      </Button>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-6 w-6 text-destructive"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          e.preventDefault();
+                                          const taskId = task.id;
+                                          deleteTask(taskId);
+                                        }}
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="flex items-center text-xs text-red-500 mt-1">
+                                  <Calendar className="h-3 w-3 mr-1" />
+                                  <span>
+                                    Due{" "}
+                                    {format(
+                                      new Date(task.due_date),
+                                      "EEE, MMM d",
+                                    )}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Upcoming tasks grouped by date range */}
+                {Object.entries(groupedUpcomingTasks).map(
+                  ([dateRange, tasks]) => (
+                    <div key={dateRange}>
+                      <div
+                        className="flex justify-between items-center mb-2 cursor-pointer"
+                        onClick={() =>
+                          document
+                            .getElementById(
+                              `tasks-${dateRange.replace(/[^a-zA-Z0-9]/g, "-")}`,
+                            )
+                            ?.classList.toggle("hidden")
+                        }
+                      >
+                        <h3 className="font-medium text-sm flex items-center">
+                          <Badge variant="outline" className="mr-2">
+                            {dateRange} ({tasks.length})
+                          </Badge>
+                        </h3>
+                        <span className="text-xs text-muted-foreground">
+                          Click to expand/collapse
+                        </span>
+                      </div>
+                      <div
+                        id={`tasks-${dateRange.replace(/[^a-zA-Z0-9]/g, "-")}`}
+                      >
+                        <div className="space-y-2">
+                          {tasks.map((task) => {
+                            const isCompleted = isTaskCompletedByUser(
+                              task.id,
+                              user?.id || "",
+                            );
+                            return (
+                              <div
+                                key={task.id}
+                                className="flex items-start gap-3 p-2 hover:bg-muted/50 rounded-md"
+                              >
+                                <div className="mt-1">
+                                  <div
+                                    onClick={() => handleToggleTaskCompletion(task.id)}
+                                    className="h-5 w-5 rounded border flex items-center justify-center cursor-pointer"
+                                  >
+                                    {isCompleted && <CheckCircle2 className="h-4 w-4 text-primary" />}
+                                  </div>
+                                </div>
+                                <div className="flex-1">
+                                  <div className="flex justify-between items-start">
+                                    <div
+                                      className={`font-medium ${isCompleted ? "line-through text-muted-foreground" : ""}`}
+                                    >
+                                      {task.title}
+                                    </div>
+                                    {canEditTasks && (
+                                      <div className="flex space-x-1">
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            // Show edit dialog
+                                            setEditingTask(task);
+                                            setIsEditDialogOpen(true);
+                                          }}
+                                        >
+                                          <Edit className="h-3 w-3" />
+                                        </Button>
+                                        <Button
+                                          variant="ghost"
+                                          size="icon"
+                                          className="h-6 w-6 text-destructive"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            const taskId = task.id;
+                                            deleteTask(taskId);
+                                          }}
+                                        >
+                                          <Trash2 className="h-3 w-3" />
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center text-xs text-muted-foreground mt-1">
+                                    <Calendar className="h-3 w-3 mr-1" />
+                                    <span>
+                                      Due{" "}
+                                      {format(
+                                        new Date(task.due_date),
+                                        "EEE, MMM d",
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ),
+                )}
+
+                {/* Completed tasks */}
+                {completedTasks.length > 0 && (
+                  <div>
+                    <div
+                      className="flex justify-between items-center mb-2 cursor-pointer"
+                      onClick={() =>
+                        document
+                          .getElementById("completed-tasks")
+                          ?.classList.toggle("hidden")
+                      }
+                    >
+                      <h3 className="font-medium text-sm flex items-center">
+                        <Badge variant="secondary" className="mr-2">
+                          Completed ({completedTasks.length})
+                        </Badge>
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        Click to expand/collapse
+                      </span>
+                    </div>
+                    <div id="completed-tasks" className="hidden">
+                      <div className="space-y-2">
+                        {completedTasks.map((task) => (
+                          <div
+                            key={task.id}
+                            className="flex items-start gap-3 p-2 hover:bg-muted/50 rounded-md"
+                          >
+                            <div className="mt-1">
+                              <div
+                                onClick={() => handleToggleTaskCompletion(task.id)}
+                                className="h-5 w-5 rounded border flex items-center justify-center cursor-pointer bg-primary/10"
+                              >
+                                <CheckCircle2 className="h-4 w-4 text-primary" />
+                              </div>
+                            </div>
+                            <div className="flex-1">
+                              <div className="flex justify-between items-start">
+                                <div className="font-medium line-through text-muted-foreground">
+                                  {task.title}
+                                </div>
+                                {canEditTasks && (
+                                  <div className="flex space-x-1">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6 text-destructive"
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        e.preventDefault();
+                                        const taskId = task.id;
+                                        deleteTask(taskId);
+                                      }}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center text-xs text-muted-foreground mt-1">
+                                <Calendar className="h-3 w-3 mr-1" />
+                                <span>Completed</span>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {tasks.length === 0 && (
+                  <div className="text-center p-6">
+                    <p className="text-muted-foreground">
+                      No tasks yet. {canEditTasks ? "Add a task below." : ""}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </CardContent>
 
           {canEditTasks && (
-            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" /> Add Task
-                </Button>
-              </DialogTrigger>
+            <div className="p-4 border-t">
+              <div className="flex flex-col space-y-2">
+                {showDatePicker && (
+                  <div className="flex items-center space-x-2">
+                    <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="date"
+                      value={newTaskDueDate}
+                      onChange={(e) => setNewTaskDueDate(e.target.value)}
+                      className="w-auto"
+                    />
+                  </div>
+                )}
+                <div className="flex space-x-2">
+                  <Input
+                    placeholder="Add a new task..."
+                    value={newTaskText}
+                    onChange={(e) => setNewTaskText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAddTask();
+                      }
+                    }}
+                  />
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setShowDatePicker(!showDatePicker)}
+                  >
+                    <CalendarIcon className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    onClick={handleAddTask}
+                    disabled={!newTaskText.trim()}
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Edit Task Dialog */}
+          {editingTask && (
+            <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
               <DialogContent>
                 <DialogHeader>
-                  <DialogTitle>Add New Task</DialogTitle>
-                  <DialogDescription>
-                    Create a new task or assignment.
-                  </DialogDescription>
+                  <DialogTitle>Edit Task</DialogTitle>
                 </DialogHeader>
-
                 <div className="space-y-4 py-4">
                   <div className="space-y-2">
-                    <Label htmlFor="taskTitle">Task Title</Label>
+                    <Label htmlFor="edit-title">Task Title</Label>
                     <Input
-                      id="taskTitle"
-                      placeholder="Enter task title"
-                      value={newTask.title}
+                      id="edit-title"
+                      value={editingTask.title}
                       onChange={(e) =>
-                        setNewTask({ ...newTask, title: e.target.value })
+                        setEditingTask({
+                          ...editingTask,
+                          title: e.target.value,
+                        })
                       }
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="taskDescription">
+                    <Label htmlFor="edit-description">
                       Description (Optional)
                     </Label>
                     <Textarea
-                      id="taskDescription"
-                      placeholder="Enter task description"
-                      value={newTask.description}
+                      id="edit-description"
+                      value={editingTask.description || ""}
                       onChange={(e) =>
-                        setNewTask({ ...newTask, description: e.target.value })
+                        setEditingTask({
+                          ...editingTask,
+                          description: e.target.value,
+                        })
                       }
                     />
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="dueDate">Due Date</Label>
+                    <Label htmlFor="edit-dueDate">Due Date</Label>
                     <Input
-                      id="dueDate"
+                      id="edit-dueDate"
                       type="date"
-                      value={newTask.dueDate}
+                      value={editingTask.due_date.split("T")[0]}
                       onChange={(e) =>
-                        setNewTask({ ...newTask, dueDate: e.target.value })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="subject">Subject (Optional)</Label>
-                    <Input
-                      id="subject"
-                      placeholder="e.g. Math, Science"
-                      value={newTask.subject}
-                      onChange={(e) =>
-                        setNewTask({ ...newTask, subject: e.target.value })
+                        setEditingTask({
+                          ...editingTask,
+                          due_date: e.target.value,
+                        })
                       }
                     />
                   </div>
                 </div>
-
                 <DialogFooter>
                   <Button
                     variant="outline"
-                    onClick={() => setIsAddDialogOpen(false)}
+                    onClick={() => setIsEditDialogOpen(false)}
                   >
                     Cancel
                   </Button>
-                  <Button onClick={handleAddTask} disabled={!newTask.title}>
-                    Add Task
+                  <Button
+                    onClick={handleEditTask}
+                    disabled={!editingTask.title || !editingTask.due_date}
+                  >
+                    Save Changes
                   </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
           )}
-        </div>
-
-        <div className="flex space-x-2 mb-4 overflow-x-auto pb-2">
-          <Button
-            variant={filter === "all" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilter("all")}
-          >
-            All Tasks
-          </Button>
-          <Button
-            variant={filter === "today" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilter("today")}
-          >
-            Today
-          </Button>
-          <Button
-            variant={filter === "upcoming" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilter("upcoming")}
-          >
-            Upcoming
-          </Button>
-          <Button
-            variant={filter === "completed" ? "default" : "outline"}
-            size="sm"
-            onClick={() => setFilter("completed")}
-          >
-            Completed
-          </Button>
-        </div>
-
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-          {getFilteredTasks().length === 0 ? (
-            <div className="col-span-full text-center p-6 border rounded-md bg-muted/50">
-              <p className="text-muted-foreground mb-4">
-                {filter === "all"
-                  ? "No tasks found."
-                  : `No ${filter} tasks found.`}
-              </p>
-              {canEditTasks && (
-                <Button onClick={() => setIsAddDialogOpen(true)}>
-                  <Plus className="mr-2 h-4 w-4" /> Add Task
-                </Button>
-              )}
-            </div>
-          ) : (
-            getFilteredTasks().map((task) => (
-              <Card key={task.id} className="overflow-hidden">
-                <div
-                  className={`h-2 ${task.completed ? "bg-green-500" : "bg-blue-500"}`}
-                ></div>
-                <CardHeader className="pb-2">
-                  <div className="flex justify-between items-start">
-                    <div className="flex items-center space-x-2">
-                      <Checkbox
-                        checked={task.completed}
-                        onCheckedChange={() =>
-                          handleToggleComplete(task.id, task.completed)
-                        }
-                        id={`task-${task.id}`}
-                      />
-                      <Label
-                        htmlFor={`task-${task.id}`}
-                        className={`font-medium ${task.completed ? "line-through text-muted-foreground" : ""}`}
-                      >
-                        {task.title}
-                      </Label>
-                    </div>
-                    <div className="flex space-x-1">
-                      {canEditTasks && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => startEditTask(task)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="text-destructive"
-                            onClick={() => handleDeleteTask(task.id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  {task.subject && (
-                    <CardDescription>
-                      <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-                        {task.subject}
-                      </span>
-                    </CardDescription>
-                  )}
-                </CardHeader>
-                <CardContent>
-                  {task.description && (
-                    <p className="text-sm mb-4">{task.description}</p>
-                  )}
-                  <div className="text-xs text-muted-foreground space-y-1">
-                    <div className="flex items-center">
-                      <Calendar className="h-3 w-3 mr-1" /> Due:{" "}
-                      {formatDate(task.dueDate)}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Created by {task.createdBy} on{" "}
-                      {formatDate(task.createdAt)}
-                    </div>
-                  </div>
-                </CardContent>
-                <CardFooter className="flex flex-col space-y-3">
-                  {canEditTasks && (
-                    <Button
-                      variant="outline"
-                      className="w-full"
-                      onClick={() =>
-                        handleToggleComplete(task.id, task.completed)
-                      }
-                    >
-                      {task.completed ? (
-                        <>
-                          <CheckCircle className="mr-2 h-4 w-4 text-green-500" />
-                          Mark as Incomplete
-                        </>
-                      ) : (
-                        <>
-                          <CheckCircle className="mr-2 h-4 w-4" /> Mark as
-                          Complete
-                        </>
-                      )}
-                    </Button>
-                  )}
-
-                  <Button
-                    variant="ghost"
-                    className="w-full"
-                    onClick={() => toggleComments(task.id)}
-                  >
-                    <MessageSquare className="mr-2 h-4 w-4" />
-                    Comments ({comments[task.id]?.length || 0})
-                  </Button>
-
-                  {isCommentsOpen[task.id] && (
-                    <div className="w-full border rounded-md p-3 space-y-3">
-                      <div className="max-h-40 overflow-y-auto space-y-2">
-                        {comments[task.id]?.length ? (
-                          comments[task.id].map((comment) => (
-                            <div
-                              key={comment.id}
-                              className="text-sm border-b pb-2"
-                            >
-                              <div className="font-medium">
-                                {comment.createdBy}
-                              </div>
-                              <div>{comment.content}</div>
-                              <div className="text-xs text-muted-foreground">
-                                {format(
-                                  new Date(comment.createdAt),
-                                  "MMM d, h:mm a",
-                                )}
-                              </div>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="text-sm text-muted-foreground text-center">
-                            No comments yet
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex space-x-2">
-                        <Input
-                          placeholder="Add a comment..."
-                          value={newComment[task.id] || ""}
-                          onChange={(e) =>
-                            setNewComment((prev) => ({
-                              ...prev,
-                              [task.id]: e.target.value,
-                            }))
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" && !e.shiftKey) {
-                              e.preventDefault();
-                              addComment(task.id);
-                            }
-                          }}
-                          ref={(el) => {
-                            if (el) commentInputRefs.current[task.id] = el;
-                          }}
-                        />
-                        <Button
-                          size="icon"
-                          onClick={() => addComment(task.id)}
-                          disabled={!newComment[task.id]?.trim()}
-                        >
-                          <Send className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </CardFooter>
-              </Card>
-            ))
-          )}
-        </div>
-
-        {/* Edit Task Dialog */}
-        {editingTask && (
-          <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Edit Task</DialogTitle>
-                <DialogDescription>
-                  Update task details and status.
-                </DialogDescription>
-              </DialogHeader>
-
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-taskTitle">Task Title</Label>
-                  <Input
-                    id="edit-taskTitle"
-                    value={editingTask.title}
-                    onChange={(e) =>
-                      setEditingTask({ ...editingTask, title: e.target.value })
-                    }
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="edit-taskDescription">
-                    Description (Optional)
-                  </Label>
-                  <Textarea
-                    id="edit-taskDescription"
-                    value={editingTask.description || ""}
-                    onChange={(e) =>
-                      setEditingTask({
-                        ...editingTask,
-                        description: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="edit-dueDate">Due Date</Label>
-                  <Input
-                    id="edit-dueDate"
-                    type="date"
-                    value={editingTask.dueDate}
-                    onChange={(e) =>
-                      setEditingTask({
-                        ...editingTask,
-                        dueDate: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="edit-subject">Subject (Optional)</Label>
-                  <Input
-                    id="edit-subject"
-                    value={editingTask.subject || ""}
-                    onChange={(e) =>
-                      setEditingTask({
-                        ...editingTask,
-                        subject: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="edit-completed"
-                    checked={editingTask.completed}
-                    onCheckedChange={(checked) =>
-                      setEditingTask({
-                        ...editingTask,
-                        completed: checked as boolean,
-                      })
-                    }
-                  />
-                  <Label htmlFor="edit-completed">Mark as completed</Label>
-                </div>
-              </div>
-
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setIsEditDialogOpen(false)}
-                >
-                  Cancel
-                </Button>
-                <Button onClick={handleEditTask}>Save Changes</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
+        </Card>
       </div>
     </DashboardLayout>
   );
