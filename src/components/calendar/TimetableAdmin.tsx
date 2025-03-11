@@ -50,7 +50,7 @@ export default function TimetableAdmin() {
   const [isEditSlotDialogOpen, setIsEditSlotDialogOpen] = useState(false);
   const [newSlot, setNewSlot] = useState<Partial<TimetableSlot>>({
     day: "Monday",
-    timeSlot: { start: "08:00", end: "09:00" },
+    timeSlot: { start: "08:00", end: "08:00" },
     subject: "",
     room: "",
     teacher: "",
@@ -298,7 +298,7 @@ export default function TimetableAdmin() {
   const resetNewSlot = () => {
     setNewSlot({
       day: "Monday",
-      timeSlot: { start: "08:00", end: "09:00" },
+      timeSlot: { start: "08:00", end: "08:00" },
       subject: "",
       room: "",
       teacher: "",
