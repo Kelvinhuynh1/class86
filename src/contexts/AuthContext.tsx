@@ -21,6 +21,9 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+// 5 days in milliseconds
+const SESSION_EXPIRY_TIME = 5 * 24 * 60 * 60 * 1000;
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -29,13 +32,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Check for existing user in session storage
     const checkUser = async () => {
       try {
-        const storedUser = sessionStorage.getItem("user");
-        if (storedUser) {
-          const parsedUser = JSON.parse(storedUser);
-          setUser(parsedUser as User);
+        const storedUserData = localStorage.getItem("userData");
+        if (storedUserData) {
+          const { user: parsedUser, timestamp } = JSON.parse(storedUserData);
+
+          // Check if the session is still valid (less than 5 days old)
+          const currentTime = new Date().getTime();
+          if (currentTime - timestamp < SESSION_EXPIRY_TIME) {
+            setUser(parsedUser as User);
+          } else {
+            // Session expired, clear localStorage
+            localStorage.removeItem("userData");
+          }
         }
       } catch (error) {
         console.error("Error checking user:", error);
+        localStorage.removeItem("userData");
       } finally {
         setLoading(false);
       }
@@ -71,7 +83,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
 
         setUser(user);
-        sessionStorage.setItem("user", JSON.stringify(user));
+
+        // Store user with timestamp in localStorage
+        const userDataWithTimestamp = {
+          user,
+          timestamp: new Date().getTime(),
+        };
+        localStorage.setItem("userData", JSON.stringify(userDataWithTimestamp));
+
         return { user };
       } else {
         return { error: "Incorrect password" };
@@ -84,8 +103,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     try {
-      // Clear user from session storage
-      sessionStorage.removeItem("user");
+      // Clear user from localStorage
+      localStorage.removeItem("userData");
       setUser(null);
     } catch (error) {
       console.error("Error signing out:", error);
