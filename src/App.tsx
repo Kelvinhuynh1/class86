@@ -165,8 +165,11 @@ function App() {
               <Route path="/adminpanel" element={<AdminPanelPage />} />
               <Route path="/link/:encodedUrl" element={<LinkHandler />} />
               {/* Add more routes for other features */}
+              {/* Add Tempo routes */}
+              {import.meta.env.VITE_TEMPO === "true" && (
+                <Route path="/tempobook/*" />
+              )}
             </Routes>
-            {import.meta.env.VITE_TEMPO === "true" && useRoutes(routes)}
           </>
         </Suspense>
       </NotificationProvider>
