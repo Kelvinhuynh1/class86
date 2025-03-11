@@ -138,13 +138,14 @@ export default function DailyNotes() {
 
       // Update the subjects table with these colors
       for (const subject in colorMap) {
-        await supabase
+        const { error: updateError } = await supabase
           .from("subjects")
           .update({ color: colorMap[subject] })
-          .eq("name", subject)
-          .catch((e) =>
-            console.error(`Failed to update color for ${subject}:`, e),
-          );
+          .eq("name", subject);
+
+        if (updateError) {
+          console.error(`Failed to update color for ${subject}:`, updateError);
+        }
       }
     } catch (err) {
       console.error("Error fetching subject colors:", err);
@@ -175,9 +176,12 @@ export default function DailyNotes() {
       if (subjectsError) {
         console.error("Error fetching subjects:", subjectsError);
         // Try to create the subjects table if it doesn't exist
-        await supabase
-          .rpc("create_subjects_table")
-          .catch((e) => console.error("Failed to create subjects table:", e));
+        const { error: createError } = await supabase.rpc(
+          "create_subjects_table",
+        );
+        if (createError) {
+          console.error("Failed to create subjects table:", createError);
+        }
       }
 
       let allSubjects: string[] = [];
@@ -221,14 +225,17 @@ export default function DailyNotes() {
 
           // Add these subjects to the subjects table for future use
           for (const subject of allSubjects) {
-            await supabase
+            const { error: insertError } = await supabase
               .from("subjects")
               .insert({
                 name: subject,
                 color:
                   subjectColorMap[subject] || getDefaultSubjectColor(subject),
-              })
-              .catch((e) => console.error("Failed to insert subject:", e));
+              });
+
+            if (insertError) {
+              console.error("Failed to insert subject:", insertError);
+            }
           }
         } else {
           // Fallback to demo subjects
@@ -245,13 +252,16 @@ export default function DailyNotes() {
           for (const subject of allSubjects) {
             const defaultColor = getDefaultSubjectColor(subject);
             subjectColorMap[subject] = defaultColor;
-            await supabase
+            const { error: insertError } = await supabase
               .from("subjects")
               .insert({
                 name: subject,
                 color: defaultColor,
-              })
-              .catch((e) => console.error("Failed to insert subject:", e));
+              });
+
+            if (insertError) {
+              console.error("Failed to insert subject:", insertError);
+            }
           }
 
           // Update subject colors state
@@ -288,14 +298,17 @@ export default function DailyNotes() {
             if (!allSubjects.includes(subject)) {
               allSubjects.push(subject);
               // Also add to subjects table
-              await supabase
+              const { error: insertError } = await supabase
                 .from("subjects")
                 .insert({
                   name: subject,
                   color:
                     subjectColorMap[subject] || getDefaultSubjectColor(subject),
-                })
-                .catch((e) => console.error("Failed to insert subject:", e));
+                });
+
+              if (insertError) {
+                console.error("Failed to insert subject:", insertError);
+              }
             }
           }
         }
@@ -305,13 +318,14 @@ export default function DailyNotes() {
       if (!allSubjects.includes("General")) {
         allSubjects.push("General");
         // Also add to subjects table
-        await supabase
-          .from("subjects")
-          .insert({
-            name: "General",
-            color: "bg-slate-100 border-slate-200",
-          })
-          .catch((e) => console.error("Failed to insert General subject:", e));
+        const { error: insertError } = await supabase.from("subjects").insert({
+          name: "General",
+          color: "bg-slate-100 border-slate-200",
+        });
+
+        if (insertError) {
+          console.error("Failed to insert General subject:", insertError);
+        }
       }
 
       setSubjects(allSubjects);
@@ -422,25 +436,29 @@ export default function DailyNotes() {
 
         if (!subjectData) {
           // Subject doesn't exist, create it
-          await supabase
+          const { error: createError } = await supabase
             .from("subjects")
             .insert({
               name: newNote.subject,
               color: getDefaultSubjectColor(newNote.subject),
               updated_at: new Date().toISOString(),
-            })
-            .catch((e) => console.error("Failed to create subject:", e));
+            });
+
+          if (createError) {
+            console.error("Failed to create subject:", createError);
+          }
         } else {
           // Subject exists, update timestamp
-          await supabase
+          const { error: updateError } = await supabase
             .from("subjects")
             .update({
               updated_at: new Date().toISOString(),
             })
-            .eq("name", newNote.subject)
-            .catch((e) =>
-              console.error("Failed to update subject timestamp:", e),
-            );
+            .eq("name", newNote.subject);
+
+          if (updateError) {
+            console.error("Failed to update subject timestamp:", updateError);
+          }
         }
       } catch (subjectErr) {
         console.error("Error updating subject:", subjectErr);
@@ -520,12 +538,16 @@ export default function DailyNotes() {
 
       // Update subject in subjects table
       try {
-        await supabase
+        const { error: updateError } = await supabase
           .from("subjects")
           .update({
             updated_at: new Date().toISOString(),
           })
           .eq("name", editingNote.subject);
+
+        if (updateError) {
+          console.error("Error updating subject timestamp:", updateError);
+        }
       } catch (subjectErr) {
         console.error("Error updating subject timestamp:", subjectErr);
       }
@@ -559,12 +581,16 @@ export default function DailyNotes() {
       // Update subject in subjects table
       if (noteSubject) {
         try {
-          await supabase
+          const { error: updateError } = await supabase
             .from("subjects")
             .update({
               updated_at: new Date().toISOString(),
             })
             .eq("name", noteSubject);
+
+          if (updateError) {
+            console.error("Error updating subject timestamp:", updateError);
+          }
         } catch (subjectErr) {
           console.error("Error updating subject timestamp:", subjectErr);
         }
