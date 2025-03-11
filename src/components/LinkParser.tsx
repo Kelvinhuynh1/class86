@@ -24,7 +24,7 @@ export default function LinkParser({ text }: LinkParserProps) {
           return (
             <Link
               key={i}
-              to={`/link/${encodedUrl}`}
+              to={`/link/${encodedUrl as string}`}
               className="text-blue-500 hover:underline"
             >
               {part}
