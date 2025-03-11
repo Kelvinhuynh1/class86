@@ -50,7 +50,7 @@ export default function TimetableAdmin() {
   const [isEditSlotDialogOpen, setIsEditSlotDialogOpen] = useState(false);
   const [newSlot, setNewSlot] = useState<Partial<TimetableSlot>>({
     day: "Monday",
-    timeSlot: { start: "08:00", end: "08:00" },
+    timeSlot: { start: "08:00", end: "09:00" },
     subject: "",
     room: "",
     teacher: "",
@@ -298,7 +298,7 @@ export default function TimetableAdmin() {
   const resetNewSlot = () => {
     setNewSlot({
       day: "Monday",
-      timeSlot: { start: "08:00", end: "08:00" },
+      timeSlot: { start: "08:00", end: "09:00" },
       subject: "",
       room: "",
       teacher: "",
@@ -320,6 +320,16 @@ export default function TimetableAdmin() {
   const startEditBreak = (breakItem: Break) => {
     setEditingBreak({ ...breakItem });
     setIsEditBreakDialogOpen(true);
+  };
+
+  const handleTimeSlotChange = (field: 'start' | 'end', value: string) => {
+    setNewSlot({
+      ...newSlot,
+      timeSlot: {
+        start: field === 'start' ? value : (newSlot.timeSlot?.start || "08:00"),
+        end: field === 'end' ? value : (newSlot.timeSlot?.end || "09:00"),
+      },
+    });
   };
 
   if (loading) {
@@ -398,16 +408,8 @@ export default function TimetableAdmin() {
                         <Input
                           id="startTime"
                           type="time"
-                          value={newSlot.timeSlot?.start}
-                          onChange={(e) =>
-                            setNewSlot({
-                              ...newSlot,
-                              timeSlot: {
-                                ...(newSlot.timeSlot || {}),
-                                start: e.target.value,
-                              },
-                            })
-                          }
+                          value={newSlot.timeSlot?.start || "08:00"}
+                          onChange={(e) => handleTimeSlotChange('start', e.target.value)}
                         />
                       </div>
                       <div className="space-y-2">
@@ -415,16 +417,8 @@ export default function TimetableAdmin() {
                         <Input
                           id="endTime"
                           type="time"
-                          value={newSlot.timeSlot?.end}
-                          onChange={(e) =>
-                            setNewSlot({
-                              ...newSlot,
-                              timeSlot: {
-                                ...(newSlot.timeSlot || {}),
-                                end: e.target.value,
-                              },
-                            })
-                          }
+                          value={newSlot.timeSlot?.end || "09:00"}
+                          onChange={(e) => handleTimeSlotChange('end', e.target.value)}
                         />
                       </div>
                     </div>
