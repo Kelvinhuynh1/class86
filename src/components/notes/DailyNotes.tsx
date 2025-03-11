@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { format, parseISO, addDays, subDays } from "date-fns";
 import {
   Plus,
   Edit,
@@ -42,12 +43,16 @@ interface DailyNote {
   isImportant: boolean;
 }
 
-export default function DailyNotes() {
+interface DailyNotesProps {
+  initialDate?: string;
+}
+
+export default function DailyNotes({ initialDate }: DailyNotesProps) {
   const { user, hasPermission } = useAuth();
   const [notes, setNotes] = useState<DailyNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState<string>(
-    new Date().toISOString().split("T")[0],
+    initialDate || new Date().toISOString().split("T")[0],
   );
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -65,6 +70,8 @@ export default function DailyNotes() {
 
   // Get today's timetable subjects
   useEffect(() => {
+    // Clear subjects when date changes to avoid showing previous day's subjects
+    setSubjects([]);
     fetchSubjectsForDate(selectedDate);
     fetchNotes();
     fetchSubjectColors();
@@ -141,7 +148,9 @@ export default function DailyNotes() {
           .from("subjects")
           .update({ color: colorMap[subject] })
           .eq("name", subject)
-          .match({ active: true });
+          .catch((e) =>
+            console.error(`Failed to update color for ${subject}:`, e),
+          );
       }
     } catch (err) {
       console.error("Error fetching subject colors:", err);
@@ -150,6 +159,9 @@ export default function DailyNotes() {
 
   const fetchSubjectsForDate = async (dateStr: string) => {
     try {
+      // Clear subjects first to avoid showing stale data
+      setSubjects([]);
+
       const date = new Date(dateStr);
       const dayOfWeek = date.getDay();
       const days = [
@@ -163,158 +175,74 @@ export default function DailyNotes() {
       ];
       const dayName = days[dayOfWeek];
 
-      // First, fetch all subjects from the subjects table
-      const { data: allSubjectsData, error: subjectsError } = await supabase
-        .from("subjects")
-        .select("*")
-        .order("name", { ascending: true })
-        .match({ active: true });
-
-      if (subjectsError) {
-        console.error("Error fetching subjects:", subjectsError);
-        // Try to create the subjects table if it doesn't exist
-        await supabase
-          .rpc("create_subjects_table")
-          .match({ active: true });
-      }
-
-      let allSubjects: string[] = [];
-      let subjectColorMap: Record<string, string> = {};
-
-      if (allSubjectsData && allSubjectsData.length > 0) {
-        // Use subjects from the database
-        allSubjects = allSubjectsData.map((s) => s.name);
-
-        // Also update the subject colors
-        allSubjectsData.forEach((s) => {
-          if (s.color) {
-            subjectColorMap[s.name] = s.color;
-          }
-        });
-
-        // Update subject colors state
-        setSubjectColors((prev) => ({ ...prev, ...subjectColorMap }));
-      } else {
-        // If no subjects in database, try to get them from timetable
-        const { data: timetableData, error: timetableError } = await supabase
-          .from("timetable_slots")
-          .select("subject, color")
-          .order("subject", { ascending: true })
-          .match({ active: true });
-
-        if (!timetableError && timetableData) {
-          // Extract unique subjects
-          const uniqueSubjects = new Set<string>();
-          timetableData.forEach((slot: any) => {
-            if (slot.subject) {
-              uniqueSubjects.add(slot.subject);
-              if (slot.color) {
-                subjectColorMap[slot.subject] = slot.color;
-              }
-            }
-          });
-          allSubjects = Array.from(uniqueSubjects);
-
-          // Update subject colors state
-          setSubjectColors((prev) => ({ ...prev, ...subjectColorMap }));
-
-          // Add these subjects to the subjects table for future use
-          for (const subject of allSubjects) {
-            await supabase
-              .from("subjects")
-              .insert({
-                name: subject,
-                color:
-                  subjectColorMap[subject] || getDefaultSubjectColor(subject),
-              })
-              .match({ active: true });
-          }
-        } else {
-          // Fallback to demo subjects
-          allSubjects = [
-            "Tiếng Pháp",
-            "Thể dục",
-            "Tiếng Anh",
-            "Khoa học máy tính",
-            "Công nghệ",
-            "Well-being",
-          ];
-
-          // Add these subjects to the subjects table for future use
-          for (const subject of allSubjects) {
-            const defaultColor = getDefaultSubjectColor(subject);
-            subjectColorMap[subject] = defaultColor;
-            await supabase
-              .from("subjects")
-              .insert({
-                name: subject,
-                color: defaultColor,
-              })
-              .match({ active: true });
-          }
-
-          // Update subject colors state
-          setSubjectColors((prev) => ({ ...prev, ...subjectColorMap }));
-        }
-      }
-
-      // For weekdays, also get the day's schedule
+      // For weekdays, get the day's schedule
       if (dayName !== "Saturday" && dayName !== "Sunday") {
         // Fetch timetable slots for the day, ordered by start time
         const { data: dayData, error: dayError } = await supabase
           .from("timetable_slots")
           .select("subject, start_time, color")
           .eq("day", dayName)
-          .order("start_time", { ascending: true })
-          .match({ active: true });
+          .order("start_time", { ascending: true });
+
+        console.log(`Fetched timetable for ${dayName}:`, dayData);
 
         if (!dayError && dayData && dayData.length > 0) {
           // Extract subjects in order of appearance in the day
-          const orderedSubjects: string[] = [];
+          const daySubjects: string[] = [];
+          const subjectColorMap: Record<string, string> = {};
+
           dayData.forEach((slot: any) => {
-            if (slot.subject && !orderedSubjects.includes(slot.subject)) {
-              orderedSubjects.push(slot.subject);
+            if (slot.subject && !daySubjects.includes(slot.subject)) {
+              daySubjects.push(slot.subject);
               if (slot.color) {
                 subjectColorMap[slot.subject] = slot.color;
               }
             }
           });
 
+          // Add General to the list if not already there
+          if (!daySubjects.includes("General")) {
+            daySubjects.push("General");
+          }
+
           // Update subject colors state
           setSubjectColors((prev) => ({ ...prev, ...subjectColorMap }));
 
-          // Add any subjects from the day that aren't in allSubjects
-          for (const subject of orderedSubjects) {
-            if (!allSubjects.includes(subject)) {
-              allSubjects.push(subject);
-              // Also add to subjects table
-              await supabase
-                .from("subjects")
-                .insert({
-                  name: subject,
-                  color:
-                    subjectColorMap[subject] || getDefaultSubjectColor(subject),
-                })
-                .match({ active: true });
-            }
-          }
+          // Set the subjects for the day
+          setSubjects(daySubjects);
+          return;
         }
       }
 
-      // Add General to the end of the list if not already there
-      if (!allSubjects.includes("General")) {
-        allSubjects.push("General");
-        // Also add to subjects table
-        await supabase
-          .from("subjects")
-          .insert({
-            name: "General",
-            color: "bg-slate-100 border-slate-200",
-          })
-          .match({ active: true });
-      }
+      // Fallback: fetch all subjects from the subjects table
+      const { data: allSubjectsData, error: subjectsError } = await supabase
+        .from("subjects")
+        .select("*")
+        .order("name", { ascending: true });
 
-      setSubjects(allSubjects);
+      if (!subjectsError && allSubjectsData && allSubjectsData.length > 0) {
+        // Use subjects from the database
+        const allSubjects = allSubjectsData.map((s) => s.name);
+
+        // Make sure General is included
+        if (!allSubjects.includes("General")) {
+          allSubjects.push("General");
+        }
+
+        setSubjects(allSubjects);
+      } else {
+        // Last resort fallback to demo subjects
+        const demoSubjects = [
+          "Tiếng Pháp",
+          "Thể dục",
+          "Tiếng Anh",
+          "Khoa học máy tính",
+          "Công nghệ",
+          "Well-being",
+          "General",
+        ];
+        setSubjects(demoSubjects);
+      }
     } catch (err) {
       console.error("Error in fetchSubjectsForDate:", err);
       // Fallback to demo subjects
@@ -429,7 +357,7 @@ export default function DailyNotes() {
               color: getDefaultSubjectColor(newNote.subject),
               updated_at: new Date().toISOString(),
             })
-            .match({ active: true });
+            .catch((e) => console.error("Failed to create subject:", e));
         } else {
           // Subject exists, update timestamp
           await supabase
@@ -438,7 +366,9 @@ export default function DailyNotes() {
               updated_at: new Date().toISOString(),
             })
             .eq("name", newNote.subject)
-            .match({ active: true });
+            .catch((e) =>
+              console.error("Failed to update subject timestamp:", e),
+            );
         }
       } catch (subjectErr) {
         console.error("Error updating subject:", subjectErr);
@@ -523,8 +453,7 @@ export default function DailyNotes() {
           .update({
             updated_at: new Date().toISOString(),
           })
-          .eq("name", editingNote.subject)
-          .match({ active: true });
+          .eq("name", editingNote.subject);
       } catch (subjectErr) {
         console.error("Error updating subject timestamp:", subjectErr);
       }
@@ -563,8 +492,7 @@ export default function DailyNotes() {
             .update({
               updated_at: new Date().toISOString(),
             })
-            .eq("name", noteSubject)
-            .match({ active: true });
+            .eq("name", noteSubject);
         } catch (subjectErr) {
           console.error("Error updating subject timestamp:", subjectErr);
         }
@@ -775,7 +703,7 @@ export default function DailyNotes() {
               No classes scheduled for this day
             </div>
           ) : (
-            subjects.map((subject) => {
+            subjects.map((subject, index) => {
               const subjectNotes = notes.filter(
                 (note) => note.subject === subject,
               );
@@ -783,7 +711,7 @@ export default function DailyNotes() {
 
               return (
                 <div
-                  key={subject}
+                  key={`subject-${subject}-${index}`}
                   className="p-4 hover:bg-muted/30 transition-colors"
                 >
                   <div className="flex justify-between items-start mb-2">
