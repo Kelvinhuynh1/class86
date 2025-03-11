@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,13 @@ export default function LoginForm() {
   const [demoAccounts, setDemoAccounts] = useState([]);
   const { signIn } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Get redirect path from URL if present
+  const getRedirectPath = () => {
+    const params = new URLSearchParams(location.search);
+    return params.get("redirect") || "/calendar";
+  };
 
   useEffect(() => {
     // Fetch demo accounts from Supabase for display
@@ -71,9 +78,8 @@ export default function LoginForm() {
         if ("error" in result) {
           setError("Invalid class code or password");
         } else {
-          // Store user in session storage
-          sessionStorage.setItem("user", JSON.stringify(result.user));
-          navigate("/calendar");
+          // Navigate to the redirect path or default to calendar
+          navigate(getRedirectPath());
         }
       } else {
         setError("Invalid class code or password");
