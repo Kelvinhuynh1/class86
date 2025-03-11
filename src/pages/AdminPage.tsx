@@ -36,7 +36,9 @@ export default function AdminPage() {
           </TabsContent>
 
           <TabsContent value="timetable" className="mt-6">
-            <TimetableAdmin />
+            <div className="text-center p-6 text-muted-foreground">
+              Timetable management coming soon
+            </div>
           </TabsContent>
         </Tabs>
       </div>
