@@ -20,11 +20,11 @@ export default function LinkParser({ text }: LinkParserProps) {
       {parts.map((part, i) => {
         // If this part is a URL, render it as a link
         if (matches.includes(part)) {
-          const encodedUrl = encodeURIComponent(part);
+          const encodedUrl = part;
           return (
             <Link
               key={i}
-              to={`/link/${encodedUrl as string}`}
+              to={`/link/${encodedUrl}`}
               className="text-blue-500 hover:underline"
             >
               {part}
