@@ -136,9 +136,10 @@ export default function SubjectsPage() {
       if (checkError && checkError.code === "42P01") {
         // Table doesn't exist, run the migration
         console.log("Subjects table doesn't exist, creating it...");
-        await supabase.rpc("create_subjects_table").catch((e) => {
-          console.error("Failed to create subjects table:", e);
-        });
+        const { error: rpcError } = await supabase.rpc("create_subjects_table");
+        if (rpcError) {
+          console.error("Failed to create subjects table:", rpcError);
+        }
       }
 
       // Fetch subjects from Supabase
