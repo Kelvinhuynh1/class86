@@ -65,23 +65,23 @@ export default function StudyFilesPage() {
 
   const ensureStorageBuckets = async () => {
     try {
-      // Check if study_files bucket exists
+      // Check if file_storage bucket exists
       const { data: buckets, error } = await supabase.storage.listBuckets();
 
       if (error) {
         console.error("Error checking buckets:", error);
         // Try to create buckets using edge function
-        await supabase.functions.invoke("create_storage_buckets");
+        await supabase.functions.invoke("create_file_storage_bucket");
         return;
       }
 
-      const studyFilesBucketExists = buckets.some(
-        (bucket) => bucket.name === "study_files",
+      const fileStorageBucketExists = buckets.some(
+        (bucket) => bucket.name === "file_storage",
       );
 
-      if (!studyFilesBucketExists) {
+      if (!fileStorageBucketExists) {
         // Create bucket using edge function
-        await supabase.functions.invoke("create_storage_buckets");
+        await supabase.functions.invoke("create_file_storage_bucket");
       }
     } catch (err) {
       console.error("Error ensuring storage buckets exist:", err);
@@ -93,7 +93,7 @@ export default function StudyFilesPage() {
     try {
       // Fetch files directly from storage
       const { data: storageData, error: storageError } = await supabase.storage
-        .from("study_files")
+        .from("file_storage")
         .list();
 
       if (storageError) {
@@ -108,7 +108,7 @@ export default function StudyFilesPage() {
           storageData.map(async (file) => {
             // Get public URL for each file
             const { data: urlData } = supabase.storage
-              .from("study_files")
+              .from("file_storage")
               .getPublicUrl(file.name);
 
             // Try to get metadata from database if it exists
@@ -215,7 +215,7 @@ export default function StudyFilesPage() {
       const filePath = fileName;
 
       const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("study_files")
+        .from("file_storage")
         .upload(filePath, selectedFile);
 
       if (uploadError) {
@@ -226,7 +226,7 @@ export default function StudyFilesPage() {
 
       // 2. Get the public URL
       const { data: publicUrlData } = supabase.storage
-        .from("study_files")
+        .from("file_storage")
         .getPublicUrl(filePath);
 
       const publicUrl = publicUrlData.publicUrl;
@@ -289,7 +289,7 @@ export default function StudyFilesPage() {
 
       // 1. Delete from Supabase Storage
       const { error: storageError } = await supabase.storage
-        .from("study_files")
+        .from("file_storage")
         .remove([filename]);
 
       if (storageError) {
@@ -301,7 +301,7 @@ export default function StudyFilesPage() {
         .from("study_files")
         .delete()
         .eq("path", filename);
-      
+
       if (dbError) {
         console.error("Error deleting from database:", dbError);
       }
