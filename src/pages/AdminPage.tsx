@@ -1,6 +1,7 @@
 import { useState } from "react";
 import DashboardLayout from "@/components/layout/DashboardLayout";
 import StudentManagement from "@/components/admin/StudentManagement";
+import TimetableAdmin from "@/components/calendar/TimetableAdmin";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Users, Calendar } from "lucide-react";
 
@@ -36,9 +37,7 @@ export default function AdminPage() {
           </TabsContent>
 
           <TabsContent value="timetable" className="mt-6">
-            <div className="text-center p-6 text-muted-foreground">
-              Timetable management coming soon
-            </div>
+            <TimetableAdmin />
           </TabsContent>
         </Tabs>
       </div>
