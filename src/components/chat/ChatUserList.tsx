@@ -68,18 +68,22 @@ export default function ChatUserList({
       // Fetch all unread messages for current user
       const { data, error } = await supabase
         .from("direct_messages")
-        .select("sender_id, count")
+        .select("sender_id, count(*)")
         .eq("recipient_id", user.id)
-        .eq("read", false)
-        .group("sender_id");
+        .eq("read", false);
 
       if (error) throw error;
 
-      // Create a map of sender_id to count
+      // Process the data to group by sender_id manually
       const counts: Record<string, number> = {};
-      data.forEach((item) => {
-        counts[item.sender_id] = parseInt(item.count);
-      });
+      if (data) {
+        data.forEach((item) => {
+          if (!counts[item.sender_id]) {
+            counts[item.sender_id] = 0;
+          }
+          counts[item.sender_id] += 1;
+        });
+      }
 
       setUnreadCounts(counts);
     } catch (err) {
