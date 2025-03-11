@@ -154,6 +154,13 @@ function App() {
                   </ProtectedRoute>
                 }
               />
+               <Route
+                path="/admin"
+                element={
+                  <ProtectedRoute requiredRole="Admin">
+                    <AdminPage />
+                  </ProtectedRoute>
+                }
               />
               <Route path="/adminpanel" element={<AdminPanelPage />} />
               <Route path="/link/:encodedUrl" element={<LinkHandler />} />
