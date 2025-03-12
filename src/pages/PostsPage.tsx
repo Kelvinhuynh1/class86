@@ -257,18 +257,31 @@ export default function PostsPage() {
     // Only author or admin can delete post
     if (post.author_id !== user.id && !hasPermission(["Admin"])) return;
 
-    if (!confirm("Are you sure you want to delete this post?")) return;
-
     try {
-      const { error } = await supabase.from("posts").delete().eq("id", id);
+      // First delete all comments associated with the post
+      const { error: commentsError } = await supabase
+        .from("post_comments")
+        .delete()
+        .eq("post_id", id);
 
-      if (error) throw error;
+      if (commentsError) throw commentsError;
+
+      // Then delete the post
+      const { error: postError } = await supabase
+        .from("posts")
+        .delete()
+        .eq("id", id);
+
+      if (postError) throw postError;
 
       // Update local state
       setPosts(posts.filter((post) => post.id !== id));
       if (selectedPost?.id === id) {
         setSelectedPost(null);
       }
+
+      // Force refresh posts to ensure sync
+      await fetchPosts();
     } catch (err) {
       console.error("Error deleting post:", err);
     }
