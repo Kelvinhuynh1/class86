@@ -86,14 +86,7 @@ export default function PostsPage() {
         { event: "*", schema: "public", table: "posts" },
         (payload) => {
           console.log("Posts change event:", payload);
-          if (payload.eventType === 'DELETE') {
-            setPosts((prevPosts) => prevPosts.filter(post => post.id !== payload.old.id));
-            if (selectedPost?.id === payload.old.id) {
-              setSelectedPost(null);
-            }
-          } else {
-            fetchPosts();
-          }
+          fetchPosts();
         }
       )
       .subscribe();
@@ -269,39 +262,74 @@ export default function PostsPage() {
     if (post.author_id !== user.id && !hasPermission(["Admin"])) return;
 
     try {
-      // Delete all comments first
-      const { error: commentsError } = await supabase
-        .from("post_comments")
-        .delete()
-        .eq("post_id", id);
+      console.log("Deleting post:", id);
 
-      if (commentsError) {
-        console.error("Error deleting comments:", commentsError);
-        return;
-      }
-
-      // Then delete the post
+      // Delete the post
       const { error: postError } = await supabase
         .from("posts")
         .delete()
-        .eq("id", id)
-        .single();
+        .match({ id });
 
       if (postError) {
         console.error("Error deleting post:", postError);
         return;
       }
 
+      console.log("Post deleted successfully");
+
       // Update local state immediately
       setPosts((prevPosts) => prevPosts.filter((post) => post.id !== id));
       if (selectedPost?.id === id) {
         setSelectedPost(null);
       }
-
-      // Fetch posts again to ensure sync
-      await fetchPosts();
     } catch (err) {
       console.error("Error in delete operation:", err);
+    }
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    if (!user || !selectedPost) return;
+
+    const comment = selectedPost.comments?.find((c) => c.id === commentId);
+    if (!comment) return;
+
+    // Only author or admin can delete comment
+    if (comment.author_id !== user.id && !hasPermission(["Admin"])) return;
+
+    try {
+      console.log("Deleting comment:", commentId);
+
+      const { error } = await supabase
+        .from("post_comments")
+        .delete()
+        .match({ id: commentId });
+
+      if (error) {
+        console.error("Error deleting comment:", error);
+        return;
+      }
+
+      console.log("Comment deleted successfully");
+
+      // Update selected post
+      setSelectedPost({
+        ...selectedPost,
+        comments: selectedPost.comments?.filter((c) => c.id !== commentId) || [],
+      });
+
+      // Also update the post in the posts array
+      setPosts((prevPosts) =>
+        prevPosts.map((post) =>
+          post.id === selectedPost.id
+            ? {
+                ...post,
+                comments: post.comments?.filter((c) => c.id !== commentId) || [],
+              }
+            : post
+        )
+      );
+    } catch (err) {
+      console.error("Error deleting comment:", err);
     }
   };
 
@@ -352,49 +380,6 @@ export default function PostsPage() {
     } catch (err) {
       console.error("Error adding comment:", err);
       setCommentError("Failed to add comment. Please try again.");
-    }
-  };
-
-  const handleDeleteComment = async (commentId: string) => {
-    if (!user || !selectedPost) return;
-
-    const comment = selectedPost.comments?.find((c) => c.id === commentId);
-    if (!comment) return;
-
-    // Only author or admin can delete comment
-    if (comment.author_id !== user.id && !hasPermission(["Admin"])) return;
-
-    if (!confirm("Are you sure you want to delete this comment?")) return;
-
-    try {
-      const { error } = await supabase
-        .from("post_comments")
-        .delete()
-        .eq("id", commentId);
-
-      if (error) throw error;
-
-      // Update selected post
-      setSelectedPost({
-        ...selectedPost,
-        comments:
-          selectedPost.comments?.filter((c) => c.id !== commentId) || [],
-      });
-
-      // Also update the post in the posts array
-      setPosts(
-        posts.map((post) =>
-          post.id === selectedPost.id
-            ? {
-                ...post,
-                comments:
-                  post.comments?.filter((c) => c.id !== commentId) || [],
-              }
-            : post,
-        ),
-      );
-    } catch (err) {
-      console.error("Error deleting comment:", err);
     }
   };
 
