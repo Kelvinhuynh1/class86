@@ -85,6 +85,7 @@ export default function PostsPage() {
         "postgres_changes",
         { event: "*", schema: "public", table: "posts" },
         (payload) => {
+          console.log("Posts change event:", payload);
           if (payload.eventType === 'DELETE') {
             setPosts((prevPosts) => prevPosts.filter(post => post.id !== payload.old.id));
             if (selectedPost?.id === payload.old.id) {
@@ -102,7 +103,8 @@ export default function PostsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "post_comments" },
-        () => {
+        (payload) => {
+          console.log("Comments change event:", payload);
           if (selectedPost) {
             fetchPostComments(selectedPost.id);
           }
@@ -114,7 +116,7 @@ export default function PostsPage() {
       supabase.removeChannel(postsSubscription);
       supabase.removeChannel(commentsSubscription);
     };
-  }, []);
+  }, [selectedPost?.id]);
 
   useEffect(() => {
     // Scroll to bottom of comments when new comments are added
@@ -267,18 +269,7 @@ export default function PostsPage() {
     if (post.author_id !== user.id && !hasPermission(["Admin"])) return;
 
     try {
-      // Delete the post first
-      const { error: postError } = await supabase
-        .from("posts")
-        .delete()
-        .eq("id", id);
-
-      if (postError) {
-        console.error("Error deleting post:", postError);
-        return;
-      }
-
-      // Then delete all comments associated with the post
+      // Delete all comments first
       const { error: commentsError } = await supabase
         .from("post_comments")
         .delete()
@@ -286,6 +277,19 @@ export default function PostsPage() {
 
       if (commentsError) {
         console.error("Error deleting comments:", commentsError);
+        return;
+      }
+
+      // Then delete the post
+      const { error: postError } = await supabase
+        .from("posts")
+        .delete()
+        .eq("id", id)
+        .single();
+
+      if (postError) {
+        console.error("Error deleting post:", postError);
+        return;
       }
 
       // Update local state immediately
@@ -293,6 +297,9 @@ export default function PostsPage() {
       if (selectedPost?.id === id) {
         setSelectedPost(null);
       }
+
+      // Fetch posts again to ensure sync
+      await fetchPosts();
     } catch (err) {
       console.error("Error in delete operation:", err);
     }
