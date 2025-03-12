@@ -84,7 +84,16 @@ export default function PostsPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "posts" },
-        () => fetchPosts(),
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            setPosts((prevPosts) => prevPosts.filter(post => post.id !== payload.old.id));
+            if (selectedPost?.id === payload.old.id) {
+              setSelectedPost(null);
+            }
+          } else {
+            fetchPosts();
+          }
+        }
       )
       .subscribe();
 
@@ -97,7 +106,7 @@ export default function PostsPage() {
           if (selectedPost) {
             fetchPostComments(selectedPost.id);
           }
-        },
+        }
       )
       .subscribe();
 
@@ -258,32 +267,34 @@ export default function PostsPage() {
     if (post.author_id !== user.id && !hasPermission(["Admin"])) return;
 
     try {
-      // First delete all comments associated with the post
-      const { error: commentsError } = await supabase
-        .from("post_comments")
-        .delete()
-        .eq("post_id", id);
-
-      if (commentsError) throw commentsError;
-
-      // Then delete the post
+      // Delete the post first
       const { error: postError } = await supabase
         .from("posts")
         .delete()
         .eq("id", id);
 
-      if (postError) throw postError;
+      if (postError) {
+        console.error("Error deleting post:", postError);
+        return;
+      }
 
-      // Update local state
-      setPosts(posts.filter((post) => post.id !== id));
+      // Then delete all comments associated with the post
+      const { error: commentsError } = await supabase
+        .from("post_comments")
+        .delete()
+        .eq("post_id", id);
+
+      if (commentsError) {
+        console.error("Error deleting comments:", commentsError);
+      }
+
+      // Update local state immediately
+      setPosts((prevPosts) => prevPosts.filter((post) => post.id !== id));
       if (selectedPost?.id === id) {
         setSelectedPost(null);
       }
-
-      // Force refresh posts to ensure sync
-      await fetchPosts();
     } catch (err) {
-      console.error("Error deleting post:", err);
+      console.error("Error in delete operation:", err);
     }
   };
 
